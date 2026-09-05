@@ -36,6 +36,36 @@ async function run() {
       res.send('Crowdfunding server is running');
     });
 
+    // Register a new user
+    app.post('/users', async (req, res) => {
+      const user = req.body;
+
+      const existingUser = await usersCollection.findOne({ email: user.email });
+      if (existingUser) {
+        return res.status(400).send({ message: 'User already exists', insertedId: null });
+      }
+
+      if (user.role === 'supporter') {
+        user.credits = 50;
+      } else if (user.role === 'creator') {
+        user.credits = 20;
+      } else {
+        user.credits = 0;
+      }
+
+      user.createdAt = new Date();
+
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+
+    // Get a single user by email
+    app.get('/users/:email', async (req, res) => {
+      const email = req.params.email;
+      const user = await usersCollection.findOne({ email });
+      res.send(user);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } catch (err) {
