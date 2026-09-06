@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 
@@ -34,6 +35,13 @@ async function run() {
 
     app.get('/', (req, res) => {
       res.send('Crowdfunding server is running');
+    });
+
+    // JWT related API
+    app.post('/jwt', async (req, res) => {
+      const user = req.body; // { email: user.email }
+      const token = jwt.sign(user, process.env.JWT_SECRET, { expiresIn: '7d' });
+      res.send({ token });
     });
 
     // Register a new user
