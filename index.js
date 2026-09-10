@@ -392,6 +392,109 @@ async function run() {
       res.send(result);
     });
 
+    // ------------------ Withdrawals ------------------
+
+    // Get creator's total raised credits & available-to-withdraw amount
+    app.get('/withdrawals/summary/:email', verifyToken, verifyCreator, async (req, res) => {
+      const email = req.params.email;
+
+      // Total raised across all this creator's campaigns
+      const campaigns = await campaignsCollection.find({ creator_email: email }).toArray();
+      const totalRaised = campaigns.reduce((sum, c) => sum + (c.raised_amount || 0), 0);
+
+      // Total already requested/approved withdrawals (pending + approved count as "reserved")
+      const withdrawals = await withdrawalsCollection
+        .find({ creator_email: email, status: { $in: ['pending', 'approved'] } })
+        .toArray();
+      const totalWithdrawn = withdrawals.reduce((sum, w) => sum + (w.withdrawal_credit || 0), 0);
+
+      const availableCredits = totalRaised - totalWithdrawn;
+
+      res.send({
+        totalRaised,
+        totalWithdrawn,
+        availableCredits,
+        availableDollars: availableCredits / 20,
+      });
+    });
+
+    // Create a withdrawal request (Creator only)
+    app.post('/withdrawals', verifyToken, verifyCreator, async (req, res) => {
+      const { creator_email, creator_name, withdrawal_credit, payment_system, account_number } = req.body;
+
+      if (withdrawal_credit < 200) {
+        return res.status(400).send({ message: 'Minimum withdrawal is 200 credits ($10)' });
+      }
+
+      // Recalculate available credits server-side (never trust client)
+      const campaigns = await campaignsCollection.find({ creator_email }).toArray();
+      const totalRaised = campaigns.reduce((sum, c) => sum + (c.raised_amount || 0), 0);
+
+      const existingWithdrawals = await withdrawalsCollection
+        .find({ creator_email, status: { $in: ['pending', 'approved'] } })
+        .toArray();
+      const totalWithdrawn = existingWithdrawals.reduce((sum, w) => sum + (w.withdrawal_credit || 0), 0);
+
+      const available = totalRaised - totalWithdrawn;
+
+      if (withdrawal_credit > available) {
+        return res.status(400).send({ message: 'Insufficient credit for this withdrawal' });
+      }
+
+      const withdrawal = {
+        creator_email,
+        creator_name,
+        withdrawal_credit,
+        withdrawal_amount: withdrawal_credit / 20,
+        payment_system,
+        account_number,
+        withdraw_date: new Date(),
+        status: 'pending',
+      };
+
+      const result = await withdrawalsCollection.insertOne(withdrawal);
+      res.send(result);
+    });
+
+    // Get a creator's payment/withdrawal history
+    app.get('/withdrawals/creator/:email', verifyToken, verifyCreator, async (req, res) => {
+      const email = req.params.email;
+      const result = await withdrawalsCollection
+        .find({ creator_email: email })
+        .sort({ withdraw_date: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    // Get all pending withdrawal requests (Admin)
+    app.get('/withdrawals/pending', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await withdrawalsCollection.find({ status: 'pending' }).toArray();
+      res.send(result);
+    });
+
+    // Approve a withdrawal (Admin - "Payment Success" button)
+    app.patch('/withdrawals/approve/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const withdrawal = await withdrawalsCollection.findOne({ _id: new ObjectId(id) });
+
+      if (!withdrawal) return res.status(404).send({ message: 'Withdrawal request not found' });
+
+      const result = await withdrawalsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: 'approved' } }
+      );
+
+      // Notify creator
+      await notificationsCollection.insertOne({
+        message: `Your withdrawal of ${withdrawal.withdrawal_credit} credits ($${withdrawal.withdrawal_amount}) has been processed`,
+        toEmail: withdrawal.creator_email,
+        actionRoute: '/dashboard/payment-history',
+        time: new Date(),
+      });
+
+      res.send(result);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } catch (err) {
