@@ -3,6 +3,7 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -492,6 +493,74 @@ async function run() {
         time: new Date(),
       });
 
+      res.send(result);
+    });
+
+    // ------------------ Payments (Stripe) ------------------
+
+    // Credit packages (server-side source of truth, never trust client amount)
+    const creditPackages = {
+      100: 10,
+      300: 25,
+      800: 60,
+      1500: 110,
+    };
+
+    // Create a Stripe payment intent for a credit package
+    app.post('/create-payment-intent', verifyToken, async (req, res) => {
+      const { credits } = req.body;
+
+      const priceInDollars = creditPackages[credits];
+      if (!priceInDollars) {
+        return res.status(400).send({ message: 'Invalid credit package' });
+      }
+
+      const amountInCents = priceInDollars * 100;
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amountInCents,
+        currency: 'usd',
+        payment_method_types: ['card'],
+      });
+
+      res.send({ clientSecret: paymentIntent.client_secret });
+    });
+
+    // Confirm payment success - save record and increase supporter's credits
+    app.post('/payments', verifyToken, verifySupporter, async (req, res) => {
+      const { email, credits, price, transactionId } = req.body;
+
+      const expectedPrice = creditPackages[credits];
+      if (!expectedPrice || expectedPrice !== price) {
+        return res.status(400).send({ message: 'Invalid payment details' });
+      }
+
+      const payment = {
+        email,
+        credits,
+        price,
+        transactionId,
+        paymentDate: new Date(),
+      };
+
+      const result = await paymentsCollection.insertOne(payment);
+
+      // Increase supporter's credits
+      await usersCollection.updateOne(
+        { email },
+        { $inc: { credits: credits } }
+      );
+
+      res.send(result);
+    });
+
+    // Get a supporter's payment history
+    app.get('/payments/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const result = await paymentsCollection
+        .find({ email })
+        .sort({ paymentDate: -1 })
+        .toArray();
       res.send(result);
     });
 
