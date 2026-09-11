@@ -121,6 +121,12 @@ async function run() {
       res.send(result);
     });
 
+    // Get all users (Admin - Manage Users)
+    app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
+
     app.get('/users/:email', async (req, res) => {
       const email = req.params.email;
       const user = await usersCollection.findOne({ email });
@@ -132,6 +138,29 @@ async function run() {
       const email = req.params.email;
       const user = await usersCollection.findOne({ email });
       res.send({ role: user?.role || null });
+    });
+
+    // Update a user's role (Admin)
+    app.patch('/users/role/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const { role } = req.body;
+
+      if (!['supporter', 'creator', 'admin'].includes(role)) {
+        return res.status(400).send({ message: 'Invalid role' });
+      }
+
+      const result = await usersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { role } }
+      );
+      res.send(result);
+    });
+
+    // Delete a user (Admin)
+    app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await usersCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
     });
 
     // ------------------ Campaigns ------------------
@@ -561,6 +590,52 @@ async function run() {
         .find({ email })
         .sort({ paymentDate: -1 })
         .toArray();
+      res.send(result);
+    });
+
+    // ------------------ Notifications ------------------
+
+    // Get notifications for the logged-in user (sorted newest first)
+    app.get('/notifications/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const result = await notificationsCollection
+        .find({ toEmail: email })
+        .sort({ time: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    // ------------------ Reports ------------------
+
+    // Create a report for a suspicious/fraudulent campaign (Supporter)
+    app.post('/reports', verifyToken, async (req, res) => {
+      const report = req.body;
+      report.reportDate = new Date();
+      report.status = 'pending';
+      const result = await reportsCollection.insertOne(report);
+      res.send(result);
+    });
+
+    // Get all reports (Admin)
+    app.get('/reports', verifyToken, verifyAdmin, async (req, res) => {
+      const result = await reportsCollection.find().sort({ reportDate: -1 }).toArray();
+      res.send(result);
+    });
+
+    // Suspend the reported campaign (Admin)
+    app.patch('/campaigns/suspend/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await campaignsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: 'suspended' } }
+      );
+      res.send(result);
+    });
+
+    // Delete a report (Admin - after resolving)
+    app.delete('/reports/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const result = await reportsCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
